@@ -1,0 +1,119 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    container_name: zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    networks:
+      - backend
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=sensordb
+      - POSTGRES_USER=sensor_user
+      - POSTGRES_PASSWORD=sensor_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  sensor-simulator:
+    build: ./services/sensor-simulator
+    container_name: sensor-simulator
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=sensor_raw
+      - PRODUCE_INTERVAL_SECONDS=2
+    networks:
+      - backend
+
+  ingestion-service:
+    build: ./services/ingestion-service
+    container_name: ingestion-service
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_INPUT_TOPIC=sensor_raw
+      - KAFKA_OUTPUT_TOPIC=sensor_clean
+    networks:
+      - backend
+
+  stream-processing-service:
+    build: ./services/stream-processing-service
+    container_name: stream-processing-service
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_INPUT_TOPIC=sensor_clean
+      - KAFKA_OUTPUT_TOPIC=sensor_agg
+      - WINDOW_SECONDS=60
+    networks:
+      - backend
+
+  storage-service:
+    build: ./services/storage-service
+    container_name: storage-service
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_INPUT_TOPIC=sensor_agg
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sensordb
+      - DB_USER=sensor_user
+      - DB_PASSWORD=sensor_pass
+    networks:
+      - backend
+
+  api-service:
+    build: ./services/api-service
+    container_name: api-service
+    depends_on:
+      - postgres
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sensordb
+      - DB_USER=sensor_user
+      - DB_PASSWORD=sensor_pass
+    ports:
+      - "8000:8000"
+    networks:
+      - backend
+
+volumes:
+  postgres-data:
+
+networks:
+  backend:
+    driver: bridge
